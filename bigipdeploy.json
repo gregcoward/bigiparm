@@ -1,0 +1,274 @@
+{
+  "$schema": "https://schema.management.azure.com/schemas/2015-01-01/deploymentTemplate.json#",
+  "contentVersion": "1.0.0.0",
+  "parameters": {
+    "f5publicDnsName": {
+      "type": "string",
+      "metadata": {
+        "description": "Unique public DNS prefix for the deployment. The fqdn will look something like '<dnsname>.westus.cloudapp.azure.com'. Up to 62 chars, digits or dashes, lowercase, should start with a letter: must conform to '^[a-z][a-z0-9-]{1,61}[a-z0-9]$'."
+      }
+    },
+    "bigipName": {
+      "type": "string",
+      "metadata": {
+        "description": "vmName"
+      }
+    },
+    "f5VMSize": {
+      "type": "string",
+      "metadata": {
+        "Description": "The size of the BIG-IP VM Created"
+      },
+      "defaultValue": "Standard_A4"
+    },
+    "f5NicIPAddress": {
+      "type": "string",
+      "metadata": {
+        "Description": "The IP address of the new BIGIP"
+      },
+      "defaultValue": "10.0.1.10"
+    },
+    "adminUsername": {
+      "type": "string",
+      "defaultValue": "xuser",
+      "metadata": {
+        "description": "The name of the administrator of the new VM and the domain. Exclusion list: 'admin','administrator'"
+      }
+    },
+    "adminPassword": {
+      "type": "securestring",
+      "defaultValue": "F5testnet",
+      "metadata": {
+        "description": "The password for the administrator account of the new VM and the domain"
+      }
+    },
+    "userImageStorageAccountName": {
+      "type": "string",
+      "defaultValue": "f5storage",
+      "metadata": {
+        "description": "This is the name of the your existing storage account containing your custom image"
+      }
+    },
+    "userImageStorageContainerName": {
+      "type": "string",
+      "defaultValue": "vhds",
+      "metadata": {
+        "description": "This is the name of the container in your storage account"
+      }
+    },
+    "userImageVhdName": {
+      "type": "string",
+      "defaultValue": "bigip201631310143.vhd",
+      "metadata": {
+        "description": "This is the name of the your customized VHD"
+      }
+    }
+  },
+  "variables": {
+    "vnetAddressRange": "10.0.0.0/16",
+    "subnetAddressRange": "10.0.1.0/24",
+    "subnetName": "internal",
+    "subnet-id": "[concat(resourceId('Microsoft.Network/virtualNetworks','VNET'),'/subnets/',variables('subnetName'))]",
+    "newStorageAccountName": "[concat(parameters('f5publicDnsName'),'store')]",
+    "resourceImageName": "[concat('http://',parameters('userImageStorageAccountName'),'.blob.core.windows.net/',parameters('userImageStorageContainerName'),'/',parameters('userImageVhdName'))]"
+  },
+  "resources": [
+    {
+      "name": "[variables('newStorageAccountName')]",
+      "tags": {
+        "displayName": "StorageAccount"
+      },
+      "type": "Microsoft.Storage/storageAccounts",
+      "location": "[resourceGroup().location]",
+      "apiVersion": "2015-05-01-preview",
+      "properties": {
+        "accountType": "Standard_LRS"
+      }
+    },
+    {
+      "apiVersion": "2015-05-01-preview",
+      "type": "Microsoft.Network/virtualNetworks",
+      "name": "VNET",
+      "location": "[resourceGroup().location]",
+      "properties": {
+        "addressSpace": {
+          "addressPrefixes": [
+            "[variables('vnetAddressRange')]"
+          ]
+        },
+        "subnets": [
+          {
+            "name": "[variables('subnetName')]",
+            "properties": {
+              "addressPrefix": "[variables('subnetAddressRange')]"
+            }
+          }
+        ]
+      }
+    },
+    {
+      "apiVersion": "2015-05-01-preview",
+      "type": "Microsoft.Network/publicIPAddresses",
+      "name": "f5publicIp",
+      "location": "[resourceGroup().location]",
+      "properties": {
+        "publicIPAllocationMethod": "Dynamic",
+        "dnsSettings": {
+          "domainNameLabel": "[parameters('f5publicDnsName')]"
+        }
+      }
+    },
+    {
+      "apiVersion": "2015-05-01-preview",
+      "name": "f5loadBalancer",
+      "type": "Microsoft.Network/loadBalancers",
+      "location": "[resourceGroup().location]",
+      "dependsOn": [
+        "Microsoft.Network/publicIPAddresses/f5publicIp"
+      ],
+      "properties": {
+        "frontendIPConfigurations": [
+          {
+            "name": "LBFE",
+            "properties": {
+              "publicIPAddress": {
+                "id": "[resourceId('Microsoft.Network/publicIPAddresses','f5publicIp')]"
+              }
+            }
+          }
+        ],
+        "backendAddressPools": [
+          {
+            "name": "LBBAP"
+          }
+        ],
+        "inboundNatRules": [
+          {
+            "name": "MGMTNAT",
+            "properties": {
+              "frontendIPConfiguration": {
+                "id": "[concat(resourceId('Microsoft.Network/loadBalancers','f5loadBalancer'),'/frontendIPConfigurations/LBFE')]"
+              },
+              "protocol": "tcp",
+              "frontendPort": 16443,
+              "backendPort": 443,
+              "enableFloatingIP": false
+            }
+          },
+          {
+            "name": "SSHNAT",
+            "properties": {
+              "frontendIPConfiguration": {
+                "id": "[concat(resourceId('Microsoft.Network/loadBalancers','f5loadBalancer'),'/frontendIPConfigurations/LBFE')]"
+              },
+              "protocol": "tcp",
+              "frontendPort": 22,
+              "backendPort": 22,
+              "enableFloatingIP": false
+            }
+          },
+          {
+            "name": "HTTPSNAT",
+            "properties": {
+              "frontendIPConfiguration": {
+                "id": "[concat(resourceId('Microsoft.Network/loadBalancers','f5loadBalancer'),'/frontendIPConfigurations/LBFE')]"
+              },
+              "protocol": "tcp",
+              "frontendPort": 443,
+              "backendPort": 6443,
+              "enableFloatingIP": false
+            }
+          }
+        ]
+      }
+    },
+    {
+      "name": "f5-nif",
+      "type": "Microsoft.Network/networkInterfaces",
+      "apiVersion": "2015-05-01-preview",
+      "location": "[resourceGroup().location]",
+      "dependsOn": [
+        "[concat('Microsoft.Network/virtualNetworks/', 'VNET')]",
+        "Microsoft.Network/loadBalancers/f5loadBalancer"
+      ],
+      "properties": {
+        "ipConfigurations": [
+          {
+            "name": "ipconfig",
+            "properties": {
+              "privateIPAllocationMethod": "Static",
+              "privateIPAddress": "[parameters('f5NicIPAddress')]",
+              "subnet": {
+                "id": "[variables('subnet-id')]"
+              },
+              "loadBalancerBackendAddressPools": [
+                {
+                  "id": "[concat(resourceId('Microsoft.Network/loadBalancers','f5loadBalancer'),'/backendAddressPools/LBBAP')]"
+                }
+              ],
+              "loadBalancerInboundNatRules": [
+                {
+                  "id": "[concat(resourceId('Microsoft.Network/loadBalancers','f5loadBalancer'),'/inboundNatRules/MGMTNAT')]"
+                },
+                {
+                  "id": "[concat(resourceId('Microsoft.Network/loadBalancers','f5loadBalancer'),'/inboundNatRules/SSHNAT')]"
+                },
+                {
+                  "id": "[concat(resourceId('Microsoft.Network/loadBalancers','f5loadBalancer'),'/inboundNatRules/HTTPSNAT')]"
+                }
+              ]
+            }
+          }
+        ]
+      }
+    },
+    {
+      "apiVersion": "2015-05-01-preview",
+      "type": "Microsoft.Compute/virtualMachines",
+      "name": "[parameters('bigipName')]",
+      "location": "[resourceGroup().location]",
+      "dependsOn": [
+        "[concat('Microsoft.Network/networkInterfaces/', 'f5-nif')]"
+      ],
+      "plan": {
+        "name": "f5-bigip-virtual-edition-best-byol",
+        "publisher": "f5-networks",
+        "product": "f5-big-ip"
+        },
+      "properties": {
+        "hardwareProfile": {
+          "vmSize": "[parameters('f5VMSize')]"
+        },
+        "osProfile": {
+          "computerName": "bigip",
+          "adminUsername": "[parameters('adminUsername')]",
+          "adminPassword": "[parameters('adminPassword')]"
+        },
+        "storageProfile": {
+          "osDisk": {
+            "name": "[concat(parameters('f5publicDnsName'), '-osDisk')]",
+            "osType": "Linux",
+            "caching": "ReadWrite",
+            "createOption": "FromImage",
+            "image": {
+              "uri": "[variables('resourceImageName')]"
+            },
+            "vhd": {
+              "uri": "[concat('http://',variables('newStorageAccountName'),'.blob.core.windows.net/',variables('newStorageAccountName'),'/osDisk','.vhd')]"
+            }
+          }
+        },
+        "networkProfile": {
+          "networkInterfaces": [
+            {
+              "properties": {
+                "primary": true
+              },
+              "id": "[resourceId('Microsoft.Network/networkInterfaces','f5-nif')]"
+            }
+          ]
+        }
+      }
+    }
+  ]
+}

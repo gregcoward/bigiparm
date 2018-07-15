@@ -1,0 +1,7 @@
+{
+  "$schema": "http://schema.management.azure.com/schemas/2014-04-01-preview/deploymentParameters.json",
+  "parameterValues": {
+    "f5publicDnsName": "<Enter website DnsName prefix>",
+    "bigipName": "<Enter the bigip's vm name>"
+  }
+}
